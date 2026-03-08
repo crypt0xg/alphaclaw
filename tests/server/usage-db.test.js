@@ -259,4 +259,198 @@ describe("server/usage-db", () => {
 
     fs.rmSync(rootDir, { recursive: true, force: true });
   });
+
+  it("backfills usage events from session JSONL files", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-db-backfill-"));
+    const openclawDir = path.join(rootDir, ".openclaw");
+    const sessionsDir = path.join(openclawDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:main:telegram:direct:123": {
+            sessionId: "sess-1",
+            sessionFile: "sess-1.jsonl",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    fs.writeFileSync(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: new Date("2026-03-01T01:00:00.000Z").toISOString(),
+          message: { role: "user", content: "hello" },
+        }),
+        JSON.stringify({
+          timestamp: new Date("2026-03-01T01:00:02.000Z").toISOString(),
+          message: {
+            role: "assistant",
+            provider: "anthropic",
+            model: "claude-sonnet-4-6",
+            usage: {
+              input_tokens: 10,
+              output_tokens: 5,
+              cache_read_input_tokens: 20,
+              cache_creation_input_tokens: 3,
+            },
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const { initUsageDb, backfillFromTranscripts } = loadUsageDb();
+    const { path: dbPath } = initUsageDb({ rootDir });
+    const database = new DatabaseSync(dbPath);
+
+    const result = await backfillFromTranscripts({ openclawDir });
+
+    const rows = database
+      .prepare(`
+        SELECT
+          session_id,
+          session_key,
+          provider,
+          model,
+          input_tokens,
+          output_tokens,
+          cache_read_tokens,
+          cache_write_tokens,
+          total_tokens
+        FROM usage_events
+        ORDER BY timestamp ASC
+      `)
+      .all();
+
+    expect(result.backfilledEvents).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].session_id).toBe("sess-1");
+    expect(rows[0].session_key).toBe("agent:main:telegram:direct:123");
+    expect(rows[0].provider).toBe("anthropic");
+    expect(rows[0].model).toBe("claude-sonnet-4-6");
+    expect(rows[0].input_tokens).toBe(10);
+    expect(rows[0].output_tokens).toBe(5);
+    expect(rows[0].cache_read_tokens).toBe(20);
+    expect(rows[0].cache_write_tokens).toBe(3);
+    expect(rows[0].total_tokens).toBe(38);
+
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
+
+  it("skips JSONL rows newer than the existing DB cutoff", async () => {
+    const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "usage-db-backfill-cutoff-"));
+    const openclawDir = path.join(rootDir, ".openclaw");
+    const sessionsDir = path.join(openclawDir, "agents", "main", "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:main:hook:nightly:abc": {
+            sessionId: "sess-cutoff",
+            sessionFile: "sess-cutoff.jsonl",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    const olderIso = new Date("2026-03-01T01:00:00.000Z").toISOString();
+    const newerIso = new Date("2026-03-02T01:00:00.000Z").toISOString();
+    const cutoffMs = new Date("2026-03-01T12:00:00.000Z").getTime();
+    fs.writeFileSync(
+      path.join(sessionsDir, "sess-cutoff.jsonl"),
+      [
+        JSON.stringify({
+          timestamp: olderIso,
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-4o",
+            usage: { prompt_tokens: 40, completion_tokens: 2 },
+          },
+        }),
+        JSON.stringify({
+          timestamp: newerIso,
+          message: {
+            role: "assistant",
+            provider: "openai",
+            model: "gpt-4o",
+            usage: { prompt_tokens: 10, completion_tokens: 1 },
+          },
+        }),
+      ].join("\n"),
+    );
+    fs.utimesSync(
+      path.join(sessionsDir, "sess-cutoff.jsonl"),
+      new Date("2026-03-01T00:00:00.000Z"),
+      new Date("2026-03-01T00:00:00.000Z"),
+    );
+
+    const { initUsageDb, backfillFromTranscripts } = loadUsageDb();
+    const { path: dbPath } = initUsageDb({ rootDir });
+    const database = new DatabaseSync(dbPath);
+    database
+      .prepare(`
+        INSERT INTO usage_events (
+          timestamp,
+          session_id,
+          session_key,
+          run_id,
+          provider,
+          model,
+          input_tokens,
+          output_tokens,
+          cache_read_tokens,
+          cache_write_tokens,
+          total_tokens
+        ) VALUES (
+          $timestamp,
+          $session_id,
+          $session_key,
+          $run_id,
+          $provider,
+          $model,
+          $input_tokens,
+          $output_tokens,
+          $cache_read_tokens,
+          $cache_write_tokens,
+          $total_tokens
+        )
+      `)
+      .run({
+        $timestamp: cutoffMs,
+        $session_id: "existing",
+        $session_key: "agent:main:existing",
+        $run_id: "run-existing",
+        $provider: "openai",
+        $model: "gpt-4o",
+        $input_tokens: 1,
+        $output_tokens: 1,
+        $cache_read_tokens: 0,
+        $cache_write_tokens: 0,
+        $total_tokens: 2,
+      });
+
+    const result = await backfillFromTranscripts({ openclawDir });
+
+    const rows = database
+      .prepare(
+        "SELECT session_id, total_tokens FROM usage_events WHERE session_id = 'sess-cutoff' ORDER BY timestamp ASC",
+      )
+      .all();
+
+    expect(result.backfilledEvents).toBe(1);
+    expect(result.filesScanned).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].total_tokens).toBe(42);
+
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  });
 });

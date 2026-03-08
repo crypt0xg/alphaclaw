@@ -54,6 +54,24 @@ const createDeps = () => ({
           toolUsage: [],
         })),
   getSessionTimeSeries: vi.fn(() => ({ sessionId: "abc", points: [] })),
+  getBackfillStatus: vi.fn(() => ({
+    available: true,
+    estimatedFiles: 3,
+  })),
+  backfillFromTranscripts: vi.fn(async () => ({
+    backfilledEvents: 25,
+    skippedEvents: 10,
+    filesScanned: 3,
+    cutoffMs: null,
+  })),
+  openclawDir: "/tmp/openclaw",
+  onboardingMarkerPath: "/tmp/alphaclaw/onboarded.json",
+  fsModule: {
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn(() => "{}"),
+    writeFileSync: vi.fn(),
+    mkdirSync: vi.fn(),
+  },
 });
 
 const createApp = (deps) => {
@@ -151,5 +169,93 @@ describe("server/routes/usage", () => {
       sessionId: "abc",
       maxPoints: 200,
     });
+  });
+
+  it("returns backfill availability when onboarding marker has no usageBackfilledAt", async () => {
+    const deps = createDeps();
+    deps.fsModule.existsSync.mockReturnValue(true);
+    deps.fsModule.readFileSync.mockReturnValue(
+      JSON.stringify({
+        onboarded: true,
+        reason: "onboarding_complete",
+        markedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const app = createApp(deps);
+
+    const response = await request(app).get("/api/usage/backfill/status");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      ok: true,
+      available: true,
+      estimatedFiles: 3,
+    });
+    expect(deps.getBackfillStatus).toHaveBeenCalledWith({
+      openclawDir: "/tmp/openclaw",
+      fsModule: deps.fsModule,
+    });
+  });
+
+  it("suppresses backfill availability when onboarding marker already has usageBackfilledAt", async () => {
+    const deps = createDeps();
+    deps.fsModule.existsSync.mockReturnValue(true);
+    deps.fsModule.readFileSync.mockReturnValue(
+      JSON.stringify({
+        onboarded: true,
+        reason: "onboarding_complete",
+        markedAt: "2026-01-01T00:00:00.000Z",
+        usageBackfilledAt: "2026-01-02T00:00:00.000Z",
+      }),
+    );
+    const app = createApp(deps);
+
+    const response = await request(app).get("/api/usage/backfill/status");
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      ok: true,
+      available: false,
+      estimatedFiles: 0,
+    });
+    expect(deps.getBackfillStatus).not.toHaveBeenCalled();
+  });
+
+  it("runs usage backfill and updates onboarding marker", async () => {
+    const deps = createDeps();
+    deps.fsModule.existsSync.mockReturnValue(true);
+    deps.fsModule.readFileSync.mockReturnValue(
+      JSON.stringify({
+        onboarded: true,
+        reason: "onboarding_complete",
+        markedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const app = createApp(deps);
+
+    const response = await request(app).post("/api/usage/backfill").send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      ok: true,
+      backfilledEvents: 25,
+      skippedEvents: 10,
+      filesScanned: 3,
+    });
+    expect(deps.backfillFromTranscripts).toHaveBeenCalledWith({
+      openclawDir: "/tmp/openclaw",
+      fsModule: deps.fsModule,
+    });
+    expect(deps.fsModule.mkdirSync).toHaveBeenCalledWith("/tmp/alphaclaw", {
+      recursive: true,
+    });
+    expect(deps.fsModule.writeFileSync).toHaveBeenCalledWith(
+      "/tmp/alphaclaw/onboarded.json",
+      expect.stringContaining('"usageBackfilledEvents": 25'),
+    );
+    expect(deps.fsModule.writeFileSync).toHaveBeenCalledWith(
+      "/tmp/alphaclaw/onboarded.json",
+      expect.stringContaining('"usageBackfilledAt"'),
+    );
   });
 });
