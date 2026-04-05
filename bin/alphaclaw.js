@@ -13,6 +13,12 @@ const { buildSecretReplacements } = require("../lib/server/helpers");
 const {
   migrateManagedInternalFiles,
 } = require("../lib/server/internal-files-migration");
+const {
+  applyPendingAlphaclawUpdate,
+} = require("../lib/server/pending-alphaclaw-update");
+const {
+  applyPendingOpenclawUpdate,
+} = require("../lib/server/pending-openclaw-update");
 
 const kUsageTrackerPluginPath = path.resolve(
   __dirname,
@@ -125,6 +131,26 @@ const resolveGithubRepoPath = (value) =>
     .replace(/^git@github\.com:/, "")
     .replace(/^https:\/\/github\.com\//, "")
     .replace(/\.git$/, "");
+const isContainerRuntime = () =>
+  process.env.RAILWAY_ENVIRONMENT ||
+  process.env.RENDER ||
+  process.env.FLY_APP_NAME ||
+  fs.existsSync("/.dockerenv");
+const restartAfterPendingUpdate = () => {
+  if (isContainerRuntime()) {
+    console.log("[alphaclaw] Restarting via container crash (exit 1)...");
+    process.exit(1);
+  }
+  console.log("[alphaclaw] Spawning new process and exiting...");
+  const { spawn } = require("child_process");
+  const child = spawn(process.argv[0], process.argv.slice(1), {
+    detached: true,
+    stdio: "inherit",
+    env: process.env,
+  });
+  child.unref();
+  process.exit(0);
+};
 
 // ---------------------------------------------------------------------------
 // 1. Resolve root directory (before requiring any lib/ modules)
@@ -155,35 +181,45 @@ const { hourlyGitSyncPath } = migrateManagedInternalFiles({
 console.log(`[alphaclaw] Root directory: ${rootDir}`);
 
 // Check for pending update marker (written by the update endpoint before restart).
-// In environments where the container filesystem is ephemeral (Railway, etc.),
-// the npm install from the update endpoint is lost on restart. This re-runs it
-// from the fresh container using the persistent volume marker.
+// We perform a real npm install during boot rather than copy-merging node_modules
+// while the old process is still running. That keeps AlphaClaw and any newly
+// pinned OpenClaw version in a coherent npm tree.
 const pendingUpdateMarker = path.join(rootDir, ".alphaclaw-update-pending");
 if (fs.existsSync(pendingUpdateMarker)) {
-  console.log(
-    "[alphaclaw] Pending update detected, installing @chrysb/alphaclaw@latest...",
-  );
   const alphaPkgRoot = path.resolve(__dirname, "..");
   const nmIndex = alphaPkgRoot.lastIndexOf(
     `${path.sep}node_modules${path.sep}`,
   );
   const installDir =
     nmIndex >= 0 ? alphaPkgRoot.slice(0, nmIndex) : alphaPkgRoot;
-  try {
-    execSync(
-      "npm install @chrysb/alphaclaw@latest --omit=dev --prefer-online",
-      {
-        cwd: installDir,
-        stdio: "inherit",
-        timeout: 180000,
-      },
-    );
-    fs.unlinkSync(pendingUpdateMarker);
-    console.log("[alphaclaw] Update applied successfully");
-  } catch (e) {
-    console.log(`[alphaclaw] Update install failed: ${e.message}`);
-    fs.unlinkSync(pendingUpdateMarker);
+  const pendingUpdate = applyPendingAlphaclawUpdate({
+    execSyncImpl: execSync,
+    fsModule: fs,
+    installDir,
+    logger: console,
+    markerPath: pendingUpdateMarker,
+  });
+  if (pendingUpdate.installed) {
+    console.log("[alphaclaw] Restarting to load updated code...");
+    restartAfterPendingUpdate();
   }
+}
+
+const pendingOpenclawUpdateMarker = path.join(rootDir, ".openclaw-update-pending");
+if (fs.existsSync(pendingOpenclawUpdateMarker)) {
+  const alphaPkgRoot = path.resolve(__dirname, "..");
+  const nmIndex = alphaPkgRoot.lastIndexOf(
+    `${path.sep}node_modules${path.sep}`,
+  );
+  const installDir =
+    nmIndex >= 0 ? alphaPkgRoot.slice(0, nmIndex) : alphaPkgRoot;
+  applyPendingOpenclawUpdate({
+    execSyncImpl: execSync,
+    fsModule: fs,
+    installDir,
+    logger: console,
+    markerPath: pendingOpenclawUpdateMarker,
+  });
 }
 
 // ---------------------------------------------------------------------------
