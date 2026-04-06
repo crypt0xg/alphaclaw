@@ -290,36 +290,6 @@ if (fs.existsSync(pendingUpdateMarker)) {
   }
 }
 
-const pendingOpenclawUpdateMarker = path.join(rootDir, ".openclaw-update-pending");
-const managedOpenclawRuntimeDir = getManagedOpenclawRuntimeDir({ rootDir });
-if (fs.existsSync(pendingOpenclawUpdateMarker)) {
-  applyPendingOpenclawUpdate({
-    execSyncImpl: execSync,
-    fsModule: fs,
-    installDir: managedOpenclawRuntimeDir,
-    logger: console,
-    markerPath: pendingOpenclawUpdateMarker,
-  });
-}
-try {
-  syncManagedOpenclawRuntimeWithBundled({
-    execSyncImpl: execSync,
-    fsModule: fs,
-    logger: console,
-    runtimeDir: managedOpenclawRuntimeDir,
-  });
-} catch (error) {
-  console.log(
-    `[alphaclaw] Could not sync managed OpenClaw runtime from bundled install: ${error.message}`,
-  );
-}
-prependManagedOpenclawBinToPath({
-  env: process.env,
-  fsModule: fs,
-  logger: console,
-  runtimeDir: managedOpenclawRuntimeDir,
-});
-
 // ---------------------------------------------------------------------------
 // 3. Symlink ~/.openclaw -> <root>/.openclaw
 // ---------------------------------------------------------------------------
@@ -626,7 +596,41 @@ if (!kSetupPassword) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Set OPENCLAW_HOME globally so all child processes inherit it
+// 7. Prepare managed OpenClaw runtime
+// ---------------------------------------------------------------------------
+
+const pendingOpenclawUpdateMarker = path.join(rootDir, ".openclaw-update-pending");
+const managedOpenclawRuntimeDir = getManagedOpenclawRuntimeDir({ rootDir });
+if (fs.existsSync(pendingOpenclawUpdateMarker)) {
+  applyPendingOpenclawUpdate({
+    execSyncImpl: execSync,
+    fsModule: fs,
+    installDir: managedOpenclawRuntimeDir,
+    logger: console,
+    markerPath: pendingOpenclawUpdateMarker,
+  });
+}
+try {
+  syncManagedOpenclawRuntimeWithBundled({
+    execSyncImpl: execSync,
+    fsModule: fs,
+    logger: console,
+    runtimeDir: managedOpenclawRuntimeDir,
+  });
+} catch (error) {
+  console.log(
+    `[alphaclaw] Could not sync managed OpenClaw runtime from bundled install: ${error.message}`,
+  );
+}
+prependManagedOpenclawBinToPath({
+  env: process.env,
+  fsModule: fs,
+  logger: console,
+  runtimeDir: managedOpenclawRuntimeDir,
+});
+
+// ---------------------------------------------------------------------------
+// 8. Set OPENCLAW_HOME globally so all child processes inherit it
 // ---------------------------------------------------------------------------
 
 process.env.OPENCLAW_HOME = rootDir;
@@ -635,7 +639,7 @@ process.env.GOG_KEYRING_PASSWORD =
   process.env.GOG_KEYRING_PASSWORD || "alphaclaw";
 
 // ---------------------------------------------------------------------------
-// 8. Install gog (Google Workspace CLI) if not present
+// 9. Install gog (Google Workspace CLI) if not present
 // ---------------------------------------------------------------------------
 
 process.env.XDG_CONFIG_HOME = openclawDir;
@@ -668,7 +672,7 @@ if (!gogInstalled) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Install/reconcile system cron entry
+// 10. Install/reconcile system cron entry
 // ---------------------------------------------------------------------------
 
 const packagedHourlyGitSyncPath = path.join(setupDir, "hourly-git-sync.sh");
@@ -734,7 +738,7 @@ if (fs.existsSync(hourlyGitSyncPath)) {
 }
 
 // ---------------------------------------------------------------------------
-// 9. Start cron daemon if available
+// 11. Start cron daemon if available
 // ---------------------------------------------------------------------------
 
 try {
@@ -748,7 +752,7 @@ try {
 } catch {}
 
 // ---------------------------------------------------------------------------
-// 10. Reconcile channels if already onboarded
+// 12. Reconcile channels if already onboarded
 // ---------------------------------------------------------------------------
 
 const configPath = path.join(openclawDir, "openclaw.json");
