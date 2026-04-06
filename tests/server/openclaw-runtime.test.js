@@ -229,7 +229,9 @@ describe("server/openclaw-runtime", () => {
     );
     fs.mkdirSync(path.dirname(postinstallScriptPath), { recursive: true });
     fs.writeFileSync(postinstallScriptPath, "console.log('postinstall');\n");
-    const execSyncImpl = vi.fn();
+    const execSyncImpl = vi.fn((command, options) => {
+      fs.writeSync(options.stdio[1], "postinstall\n");
+    });
     const logger = { log: vi.fn() };
 
     const ran = runManagedOpenclawBundledPluginPostinstall({
@@ -246,15 +248,14 @@ describe("server/openclaw-runtime", () => {
     expect(execSyncImpl.mock.calls[0][1]).toEqual(
       expect.objectContaining({
         cwd: packageRoot,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", expect.any(Number), expect.any(Number)],
         timeout: 180000,
       }),
     );
     expect(execSyncImpl.mock.calls[0][1].env).not.toHaveProperty(
       "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL",
     );
-    expect(logger.log).not.toHaveBeenCalled();
+    expect(logger.log).toHaveBeenCalledWith("postinstall");
   });
 
   it("throws when bundled plugin postinstall reports a runtime-deps install failure", () => {
@@ -267,10 +268,12 @@ describe("server/openclaw-runtime", () => {
     );
     fs.mkdirSync(path.dirname(postinstallScriptPath), { recursive: true });
     fs.writeFileSync(postinstallScriptPath, "console.log('postinstall');\n");
-    const execSyncImpl = vi.fn(
-      () =>
+    const execSyncImpl = vi.fn((command, options) => {
+      fs.writeSync(
+        options.stdio[1],
         "[postinstall] could not install bundled plugin deps: Error: npm error ENOSPC",
-    );
+      );
+    });
     const logger = { log: vi.fn() };
 
     expect(() =>
@@ -284,6 +287,34 @@ describe("server/openclaw-runtime", () => {
     expect(logger.log).toHaveBeenCalledWith(
       "[postinstall] could not install bundled plugin deps: Error: npm error ENOSPC",
     );
+  });
+
+  it("logs buffered postinstall output from a failed command before rethrowing", () => {
+    const runtimeDir = getManagedOpenclawRuntimeDir({ rootDir: tmpDir });
+    const packageRoot = getManagedOpenclawPackageRoot({ runtimeDir });
+    const postinstallScriptPath = path.join(
+      packageRoot,
+      "scripts",
+      "postinstall-bundled-plugins.mjs",
+    );
+    fs.mkdirSync(path.dirname(postinstallScriptPath), { recursive: true });
+    fs.writeFileSync(postinstallScriptPath, "console.log('postinstall');\n");
+    const error = new Error("boom");
+    const execSyncImpl = vi.fn((command, options) => {
+      fs.writeSync(options.stdio[1], "postinstall failed\n");
+      throw error;
+    });
+    const logger = { log: vi.fn() };
+
+    expect(() =>
+      runManagedOpenclawBundledPluginPostinstall({
+        execSyncImpl,
+        fsModule: fs,
+        logger,
+        runtimeDir,
+      }),
+    ).toThrow(error);
+    expect(logger.log).toHaveBeenCalledWith("postinstall failed");
   });
 
   it("seeds the managed runtime from the bundled OpenClaw version when missing", () => {
