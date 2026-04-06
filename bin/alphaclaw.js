@@ -19,6 +19,10 @@ const {
 const {
   applyPendingOpenclawUpdate,
 } = require("../lib/server/pending-openclaw-update");
+const {
+  getManagedOpenclawRuntimeDir,
+  prependManagedOpenclawBinToPath,
+} = require("../lib/server/openclaw-runtime");
 
 const kUsageTrackerPluginPath = path.resolve(
   __dirname,
@@ -206,21 +210,22 @@ if (fs.existsSync(pendingUpdateMarker)) {
 }
 
 const pendingOpenclawUpdateMarker = path.join(rootDir, ".openclaw-update-pending");
+const managedOpenclawRuntimeDir = getManagedOpenclawRuntimeDir({ rootDir });
 if (fs.existsSync(pendingOpenclawUpdateMarker)) {
-  const alphaPkgRoot = path.resolve(__dirname, "..");
-  const nmIndex = alphaPkgRoot.lastIndexOf(
-    `${path.sep}node_modules${path.sep}`,
-  );
-  const installDir =
-    nmIndex >= 0 ? alphaPkgRoot.slice(0, nmIndex) : alphaPkgRoot;
   applyPendingOpenclawUpdate({
     execSyncImpl: execSync,
     fsModule: fs,
-    installDir,
+    installDir: managedOpenclawRuntimeDir,
     logger: console,
     markerPath: pendingOpenclawUpdateMarker,
   });
 }
+prependManagedOpenclawBinToPath({
+  env: process.env,
+  fsModule: fs,
+  logger: console,
+  runtimeDir: managedOpenclawRuntimeDir,
+});
 
 // ---------------------------------------------------------------------------
 // 3. Symlink ~/.openclaw -> <root>/.openclaw

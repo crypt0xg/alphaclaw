@@ -73,6 +73,12 @@ describe("server/pending-openclaw-update", () => {
         timeout: 180000,
       },
     );
+    expect(
+      JSON.parse(fs.readFileSync(path.join(tmpDir, "package.json"), "utf8")),
+    ).toEqual({
+      name: "alphaclaw-openclaw-runtime",
+      private: true,
+    });
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 
