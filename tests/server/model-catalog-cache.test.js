@@ -22,11 +22,20 @@ const normalizeModels = (models = []) =>
       label: model.name || model.label || model.key,
     }));
 
-const writeCacheFile = ({ cachePath, fetchedAt = 1000, models = [] }) => {
+const writeCacheFile = ({
+  cachePath,
+  fetchedAt = 1000,
+  openclawVersion = null,
+  models = [],
+}) => {
   fs.mkdirSync(path.dirname(cachePath), { recursive: true });
   fs.writeFileSync(
     cachePath,
-    `${JSON.stringify({ version: 1, fetchedAt, models }, null, 2)}\n`,
+    `${JSON.stringify(
+      { version: 1, fetchedAt, openclawVersion, models },
+      null,
+      2,
+    )}\n`,
     "utf8",
   );
 };
@@ -63,6 +72,7 @@ describe("server/model-catalog-cache", () => {
       gatewayEnv: () => ({ OPENCLAW_GATEWAY_TOKEN: "token" }),
       parseJsonFromNoisyOutput,
       normalizeOnboardingModels: normalizeModels,
+      readOpenclawVersion: vi.fn(() => "2026.4.14"),
     });
 
     const first = await cache.getCatalogResponse();
@@ -93,9 +103,92 @@ describe("server/model-catalog-cache", () => {
       models: normalizeModels([{ key: "openai/gpt-fresh", name: "Fresh" }]),
     });
     const written = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    expect(written.openclawVersion).toBe("2026.4.14");
     expect(written.models).toEqual(
       normalizeModels([{ key: "openai/gpt-fresh", name: "Fresh" }]),
     );
+  });
+
+  it("marks a fresh memory cache stale when the openclaw version changes", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "alphaclaw-model-catalog-version-bust-"),
+    );
+    const cachePath = path.join(tempRoot, "cache", "model-catalog.json");
+
+    let currentVersion = "2026.4.14";
+    let resolveRefresh;
+    const shellCmd = vi
+      .fn()
+      .mockResolvedValueOnce("{}")
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            resolveRefresh = resolve;
+          }),
+      );
+    const parseJsonFromNoisyOutput = vi
+      .fn()
+      .mockReturnValueOnce({
+        models: [{ key: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" }],
+      })
+      .mockReturnValueOnce({
+        models: [{ key: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" }],
+      });
+    const readOpenclawVersion = vi.fn(({ refresh } = {}) =>
+      refresh ? currentVersion : currentVersion,
+    );
+    const cache = createModelCatalogCache({
+      cachePath,
+      shellCmd,
+      parseJsonFromNoisyOutput,
+      normalizeOnboardingModels: normalizeModels,
+      readOpenclawVersion,
+    });
+
+    const initial = await cache.getCatalogResponse();
+    expect(initial).toEqual({
+      ok: true,
+      source: "openclaw",
+      fetchedAt: expect.any(Number),
+      stale: false,
+      refreshing: false,
+      models: normalizeModels([
+        { key: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" },
+      ]),
+    });
+
+    currentVersion = "2026.4.15";
+
+    const stale = await cache.getCatalogResponse();
+    expect(stale).toEqual({
+      ok: true,
+      source: "cache",
+      fetchedAt: expect.any(Number),
+      stale: true,
+      refreshing: true,
+      models: normalizeModels([
+        { key: "anthropic/claude-opus-4-6", name: "Claude Opus 4.6" },
+      ]),
+    });
+    expect(shellCmd).toHaveBeenCalledTimes(2);
+
+    resolveRefresh("{}");
+    await flushPromises();
+
+    const refreshed = await cache.getCatalogResponse();
+    expect(refreshed).toEqual({
+      ok: true,
+      source: "openclaw",
+      fetchedAt: expect.any(Number),
+      stale: false,
+      refreshing: false,
+      models: normalizeModels([
+        { key: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" },
+      ]),
+    });
+
+    const written = JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    expect(written.openclawVersion).toBe("2026.4.15");
   });
 
   it("keeps serving cache after refresh failures and retries after backoff", async () => {
@@ -107,6 +200,7 @@ describe("server/model-catalog-cache", () => {
     writeCacheFile({
       cachePath,
       fetchedAt: 222,
+      openclawVersion: "2026.4.14",
       models: normalizeModels([{ key: "openai/gpt-cached", label: "Cached" }]),
     });
 
@@ -122,6 +216,7 @@ describe("server/model-catalog-cache", () => {
       shellCmd,
       parseJsonFromNoisyOutput,
       normalizeOnboardingModels: normalizeModels,
+      readOpenclawVersion: vi.fn(() => "2026.4.14"),
       setTimeoutFn: setTimeout,
       clearTimeoutFn: clearTimeout,
     });
@@ -172,6 +267,7 @@ describe("server/model-catalog-cache", () => {
       shellCmd,
       parseJsonFromNoisyOutput: vi.fn(() => ({})),
       normalizeOnboardingModels: normalizeModels,
+      readOpenclawVersion: vi.fn(() => "2026.4.14"),
     });
 
     const response = await cache.getCatalogResponse();

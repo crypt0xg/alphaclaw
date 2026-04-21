@@ -56,6 +56,20 @@ describe("server/openclaw-version", () => {
     });
   });
 
+  it("re-reads current version when refresh is requested", () => {
+    const { service, execSyncMock } = createService();
+    execSyncMock
+      .mockReturnValueOnce("openclaw 1.2.3\n")
+      .mockReturnValueOnce("openclaw 1.2.4\n");
+
+    const first = service.readOpenclawVersion();
+    const refreshed = service.readOpenclawVersion({ refresh: true });
+
+    expect(first).toBe("1.2.3");
+    expect(refreshed).toBe("1.2.4");
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
+  });
+
   it("returns update availability when latest version is newer", async () => {
     const { service, execSyncMock } = createService();
     execSyncMock.mockReturnValueOnce("openclaw 1.2.3").mockReturnValueOnce(

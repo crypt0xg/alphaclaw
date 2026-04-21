@@ -14,6 +14,7 @@ const createModelDeps = () => {
     gatewayEnv: vi.fn(() => ({ OPENCLAW_GATEWAY_TOKEN: "token" })),
     parseJsonFromNoisyOutput: vi.fn(() => ({})),
     normalizeOnboardingModels: vi.fn(() => []),
+    readOpenclawVersion: vi.fn(() => "2026.4.15"),
     readEnvFile: vi.fn(() => []),
     writeEnvFile: vi.fn(),
     reloadEnv: vi.fn(() => true),
@@ -52,6 +53,7 @@ const createApp = (deps) => {
     gatewayEnv: deps.gatewayEnv,
     parseJsonFromNoisyOutput: deps.parseJsonFromNoisyOutput,
     normalizeOnboardingModels: deps.normalizeOnboardingModels,
+    readOpenclawVersion: deps.readOpenclawVersion,
   });
   registerModelRoutes({
     app,
