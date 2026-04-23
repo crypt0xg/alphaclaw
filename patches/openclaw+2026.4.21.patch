@@ -1,7 +1,7 @@
-diff --git a/node_modules/openclaw/dist/server.impl-DYBxSjUs.js b/node_modules/openclaw/dist/server.impl-DYBxSjUs.js
-index a2ba3c0..838db53 100644
---- a/node_modules/openclaw/dist/server.impl-DYBxSjUs.js
-+++ b/node_modules/openclaw/dist/server.impl-DYBxSjUs.js
+diff --git a/node_modules/openclaw/dist/server.impl-DLF59fRo.js b/node_modules/openclaw/dist/server.impl-DLF59fRo.js
+index d6b4a5c..4e76dd9 100644
+--- a/node_modules/openclaw/dist/server.impl-DLF59fRo.js
++++ b/node_modules/openclaw/dist/server.impl-DLF59fRo.js
 @@ -22187,7 +22187,7 @@ function attachGatewayWsMessageHandler(params) {
  					close(1008, truncateCloseReason(authMessage));
  				};
