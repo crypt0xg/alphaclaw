@@ -7,6 +7,9 @@ const {
   kOnboardingMarkerPath,
   OPENCLAW_DIR,
 } = require("../../lib/server/constants");
+const {
+  kDefaultOpenclawCompileCacheDir,
+} = require("../../lib/server/openclaw-runtime-env");
 
 const kLegacyControlUiSkillPath = path.join(OPENCLAW_DIR, "skills", "control-ui", "SKILL.md");
 
@@ -17,6 +20,7 @@ const originalExistsSync = fs.existsSync;
 const originalMkdirSync = fs.mkdirSync;
 const originalReaddirSync = fs.readdirSync;
 const originalReadFileSync = fs.readFileSync;
+const originalRmSync = fs.rmSync;
 const originalWriteFileSync = fs.writeFileSync;
 const originalCreateConnection = net.createConnection;
 
@@ -52,6 +56,7 @@ describe("server/gateway restart behavior", () => {
     fs.mkdirSync = originalMkdirSync;
     fs.readdirSync = originalReaddirSync;
     fs.readFileSync = originalReadFileSync;
+    fs.rmSync = originalRmSync;
     fs.writeFileSync = originalWriteFileSync;
     net.createConnection = originalCreateConnection;
     delete require.cache[modulePath];
@@ -97,19 +102,38 @@ describe("server/gateway restart behavior", () => {
   });
 
   it("exports the durable OpenClaw state dir in gateway env", () => {
-    delete require.cache[modulePath];
-    const gateway = require(modulePath);
+    const previousCompileCache = process.env.NODE_COMPILE_CACHE;
+    const previousNoRespawn = process.env.OPENCLAW_NO_RESPAWN;
+    delete process.env.NODE_COMPILE_CACHE;
+    delete process.env.OPENCLAW_NO_RESPAWN;
+    try {
+      delete require.cache[modulePath];
+      const gateway = require(modulePath);
 
-    expect(gateway.gatewayEnv()).toEqual(
-      expect.objectContaining({
-        HOME: expect.any(String),
-        OPENCLAW_HOME: expect.any(String),
-        OPENCLAW_CONFIG_PATH: `${OPENCLAW_DIR}/openclaw.json`,
-        OPENCLAW_STATE_DIR: OPENCLAW_DIR,
-        XDG_CONFIG_HOME: OPENCLAW_DIR,
-      }),
-    );
-    expect(gateway.gatewayEnv().HOME).toBe(gateway.gatewayEnv().OPENCLAW_HOME);
+      expect(gateway.gatewayEnv()).toEqual(
+        expect.objectContaining({
+          HOME: expect.any(String),
+          OPENCLAW_HOME: expect.any(String),
+          OPENCLAW_CONFIG_PATH: `${OPENCLAW_DIR}/openclaw.json`,
+          OPENCLAW_STATE_DIR: OPENCLAW_DIR,
+          XDG_CONFIG_HOME: OPENCLAW_DIR,
+          NODE_COMPILE_CACHE: kDefaultOpenclawCompileCacheDir,
+          OPENCLAW_NO_RESPAWN: "1",
+        }),
+      );
+      expect(gateway.gatewayEnv().HOME).toBe(gateway.gatewayEnv().OPENCLAW_HOME);
+    } finally {
+      if (previousCompileCache === undefined) {
+        delete process.env.NODE_COMPILE_CACHE;
+      } else {
+        process.env.NODE_COMPILE_CACHE = previousCompileCache;
+      }
+      if (previousNoRespawn === undefined) {
+        delete process.env.OPENCLAW_NO_RESPAWN;
+      } else {
+        process.env.OPENCLAW_NO_RESPAWN = previousNoRespawn;
+      }
+    }
   });
 
   it("uses force restart when no managed child exists", () => {
@@ -144,6 +168,68 @@ describe("server/gateway restart behavior", () => {
       encoding: "utf8",
     });
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("retries channel plugin preflight after cleaning stale install stages", () => {
+    const firstError = new Error(
+      "ENOTEMPTY: directory not empty, rmdir '/app/node_modules/openclaw/dist/extensions/telegram/.openclaw-install-stage/node_modules/typebox/build/type/engine'",
+    );
+    const execSyncMock = vi
+      .fn()
+      .mockImplementationOnce(() => {
+        throw firstError;
+      })
+      .mockReturnValueOnce("{}");
+    childProcess.execSync = execSyncMock;
+    fs.existsSync = vi.fn((targetPath) => targetPath === `${OPENCLAW_DIR}/openclaw.json`);
+    fs.readFileSync = vi.fn((targetPath, ...args) => {
+      if (targetPath === `${OPENCLAW_DIR}/openclaw.json`) {
+        return JSON.stringify({
+          channels: {
+            telegram: { enabled: true },
+          },
+        });
+      }
+      return originalReadFileSync(targetPath, ...args);
+    });
+    let stagePresent = true;
+    fs.readdirSync = vi.fn((targetPath) => {
+      if (String(targetPath).endsWith("/dist/extensions")) {
+        return [{ name: "telegram", isDirectory: () => true }];
+      }
+      if (String(targetPath).endsWith("/dist/extensions/telegram")) {
+        return [
+          ...(stagePresent
+            ? [{ name: ".openclaw-install-stage", isDirectory: () => true }]
+            : []),
+          { name: "node_modules", isDirectory: () => true },
+        ];
+      }
+      return [];
+    });
+    fs.rmSync = vi.fn(() => {
+      stagePresent = false;
+    });
+    delete require.cache[modulePath];
+    const gateway = require(modulePath);
+
+    gateway.prepareOpenclawChannelPlugins();
+
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
+    expect(execSyncMock).toHaveBeenNthCalledWith(1, "openclaw plugins list --json", {
+      env: expect.any(Object),
+      timeout: 120000,
+      encoding: "utf8",
+    });
+    expect(execSyncMock).toHaveBeenNthCalledWith(2, "openclaw plugins list --json", {
+      env: expect.any(Object),
+      timeout: 120000,
+      encoding: "utf8",
+    });
+    expect(fs.rmSync).toHaveBeenCalledWith(
+      expect.stringContaining("/telegram/.openclaw-install-stage"),
+      expect.objectContaining({ recursive: true, force: true }),
+    );
   });
 
   it("marks managed child exit as expected before force restart", async () => {

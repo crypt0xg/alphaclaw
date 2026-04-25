@@ -1,3 +1,43 @@
+diff --git a/node_modules/openclaw/dist/plugin-sdk/src/config/zod-schema.d.ts b/node_modules/openclaw/dist/plugin-sdk/src/config/zod-schema.d.ts
+index 8964b19..2285c33 100644
+--- a/node_modules/openclaw/dist/plugin-sdk/src/config/zod-schema.d.ts
++++ b/node_modules/openclaw/dist/plugin-sdk/src/config/zod-schema.d.ts
+@@ -4171,6 +4171,7 @@ export declare const OpenClawSchema: z.ZodObject<{
+             enabled: z.ZodOptional<z.ZodBoolean>;
+             hooks: z.ZodOptional<z.ZodObject<{
+                 allowPromptInjection: z.ZodOptional<z.ZodBoolean>;
++                allowConversationAccess: z.ZodOptional<z.ZodBoolean>;
+             }, z.core.$strict>>;
+             subagent: z.ZodOptional<z.ZodObject<{
+                 allowModelOverride: z.ZodOptional<z.ZodBoolean>;
+diff --git a/node_modules/openclaw/dist/runtime-schema-Dgzy-2rz.js b/node_modules/openclaw/dist/runtime-schema-Dgzy-2rz.js
+index eaaaab6..9847a80 100644
+--- a/node_modules/openclaw/dist/runtime-schema-Dgzy-2rz.js
++++ b/node_modules/openclaw/dist/runtime-schema-Dgzy-2rz.js
+@@ -19939,5 +19939,12 @@ const GENERATED_BASE_CONFIG_SCHEMA = {
+-									properties: { allowPromptInjection: {
+-										type: "boolean",
+-										title: "Allow Prompt Injection Hooks",
+-										description: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior."
+-									} },
++									properties: {
++										allowPromptInjection: {
++											type: "boolean",
++											title: "Allow Prompt Injection Hooks",
++											description: "Controls whether this plugin may mutate prompts through typed hooks. Set false to block `before_prompt_build` and ignore prompt-mutating fields from legacy `before_agent_start`, while preserving legacy `modelOverride` and `providerOverride` behavior."
++										},
++										allowConversationAccess: {
++											type: "boolean",
++											title: "Allow Conversation Access Hooks",
++											description: "Explicitly allows a non-bundled plugin to receive conversation content in typed hooks. Keep false unless the plugin is trusted to inspect conversation data."
++										}
++									},
+@@ -24760,0 +24761,5 @@ const GENERATED_BASE_CONFIG_SCHEMA = {
++		"plugins.entries.*.hooks.allowConversationAccess": {
++			label: "Allow Conversation Access Hooks",
++			help: "Explicitly allows a non-bundled plugin to receive conversation content in typed hooks. Keep false unless the plugin is trusted to inspect conversation data.",
++			tags: ["access"]
++		},
 diff --git a/node_modules/openclaw/dist/server.impl-DhtU4okW.js b/node_modules/openclaw/dist/server.impl-DhtU4okW.js
 index 93890d3..7b3c701 100644
 --- a/node_modules/openclaw/dist/server.impl-DhtU4okW.js
@@ -11,3 +51,13 @@ index 93890d3..7b3c701 100644
  						scopes = [];
  						connectParams.scopes = scopes;
  					}
+diff --git a/node_modules/openclaw/dist/zod-schema-BhKK4qYw.js b/node_modules/openclaw/dist/zod-schema-BhKK4qYw.js
+index 1dc871e..6803778 100644
+--- a/node_modules/openclaw/dist/zod-schema-BhKK4qYw.js
++++ b/node_modules/openclaw/dist/zod-schema-BhKK4qYw.js
+@@ -775 +775,4 @@ const PluginEntrySchema = z.object({
+-	hooks: z.object({ allowPromptInjection: z.boolean().optional() }).strict().optional(),
++	hooks: z.object({
++		allowPromptInjection: z.boolean().optional(),
++		allowConversationAccess: z.boolean().optional()
++	}).strict().optional(),

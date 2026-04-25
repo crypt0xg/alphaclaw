@@ -40,7 +40,16 @@ const createBaseDeps = ({ onboarded = false, hasCodexOauth = false } = {}) => {
       ]),
     },
     shellCmd: vi.fn(async () => ""),
-    gatewayEnv: vi.fn(() => ({ OPENCLAW_GATEWAY_TOKEN: "tok" })),
+    gatewayEnv: vi.fn(() => ({
+      HOME: "/tmp/alphaclaw",
+      OPENCLAW_HOME: "/tmp/alphaclaw",
+      OPENCLAW_CONFIG_PATH: "/tmp/openclaw/openclaw.json",
+      OPENCLAW_GATEWAY_TOKEN: "tok",
+      OPENCLAW_NO_RESPAWN: "1",
+      OPENCLAW_STATE_DIR: "/tmp/openclaw",
+      XDG_CONFIG_HOME: "/tmp/openclaw",
+      NODE_COMPILE_CACHE: "/tmp/alphaclaw/cache/openclaw-compile-cache",
+    })),
     readEnvFile: vi.fn(() => []),
     writeEnvFile: vi.fn(),
     reloadEnv: vi.fn(),
@@ -748,7 +757,7 @@ describe("server/routes/onboarding", () => {
     expect(deps.shellCmd).toHaveBeenCalledWith(
       'openclaw models set "openai/gpt-5.1-codex"',
       expect.objectContaining({
-        env: { OPENCLAW_GATEWAY_TOKEN: "tok" },
+        env: expect.objectContaining({ OPENCLAW_GATEWAY_TOKEN: "tok" }),
       }),
     );
   });

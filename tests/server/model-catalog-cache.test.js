@@ -4,6 +4,7 @@ const path = require("path");
 
 const {
   createModelCatalogCache,
+  kModelCatalogBootstrapSource,
   kModelCatalogRefreshBackoffMs,
 } = require("../../lib/server/model-catalog-cache");
 const { kFallbackOnboardingModels } = require("../../lib/server/constants");
@@ -43,6 +44,18 @@ const writeCacheFile = ({
 describe("server/model-catalog-cache", () => {
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("ships a full bootstrap model catalog for cold starts", () => {
+    expect(kFallbackOnboardingModels.length).toBeGreaterThan(100);
+    expect(kFallbackOnboardingModels).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "anthropic/claude-opus-4-7",
+          label: "Claude Opus 4.7",
+        }),
+      ]),
+    );
   });
 
   it("returns cached models immediately and shares a single in-flight refresh", async () => {
@@ -109,6 +122,120 @@ describe("server/model-catalog-cache", () => {
     );
   });
 
+  it("bootstraps with the bundled catalog while the initial catalog loads in the background", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "alphaclaw-model-catalog-bootstrap-"),
+    );
+    const cachePath = path.join(tempRoot, "cache", "model-catalog.json");
+
+    let resolveShell;
+    const shellCmd = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveShell = resolve;
+        }),
+    );
+    const parseJsonFromNoisyOutput = vi.fn(() => ({
+      models: [{ key: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" }],
+    }));
+    const cache = createModelCatalogCache({
+      cachePath,
+      shellCmd,
+      parseJsonFromNoisyOutput,
+      normalizeOnboardingModels: normalizeModels,
+      readOpenclawVersion: vi.fn(() => "2026.4.15"),
+    });
+
+    const initial = await cache.getCatalogResponse();
+    const repeated = await cache.getCatalogResponse();
+
+    expect(initial).toEqual({
+      ok: true,
+      source: kModelCatalogBootstrapSource,
+      fetchedAt: null,
+      stale: true,
+      refreshing: true,
+      models: kFallbackOnboardingModels,
+    });
+    expect(repeated.source).toBe(kModelCatalogBootstrapSource);
+    expect(repeated.refreshing).toBe(true);
+    expect(shellCmd).toHaveBeenCalledTimes(1);
+
+    resolveShell("{}");
+    await flushPromises();
+
+    const fresh = await cache.getCatalogResponse();
+    expect(fresh).toEqual({
+      ok: true,
+      source: "openclaw",
+      fetchedAt: expect.any(Number),
+      stale: false,
+      refreshing: false,
+      models: normalizeModels([
+        { key: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" },
+      ]),
+    });
+  });
+
+  it("serves the bundled catalog without refreshing when dynamic refresh is disabled", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "alphaclaw-model-catalog-bootstrap-only-"),
+    );
+    const cachePath = path.join(tempRoot, "cache", "model-catalog.json");
+    const shellCmd = vi.fn().mockResolvedValue("{}");
+    const cache = createModelCatalogCache({
+      cachePath,
+      shellCmd,
+      normalizeOnboardingModels: normalizeModels,
+      shouldStartDynamicRefresh: () => false,
+    });
+
+    const initial = await cache.getCatalogResponse();
+    const repeated = await cache.getCatalogResponse();
+
+    expect(initial).toEqual({
+      ok: true,
+      source: kModelCatalogBootstrapSource,
+      fetchedAt: null,
+      stale: true,
+      refreshing: false,
+      models: kFallbackOnboardingModels,
+    });
+    expect(repeated.refreshing).toBe(false);
+    expect(shellCmd).not.toHaveBeenCalled();
+  });
+
+  it("serves stale disk cache without refreshing when dynamic refresh is disabled", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "alphaclaw-model-catalog-cache-only-"),
+    );
+    const cachePath = path.join(tempRoot, "cache", "model-catalog.json");
+    writeCacheFile({
+      cachePath,
+      fetchedAt: 333,
+      models: normalizeModels([{ key: "anthropic/claude-opus-4-7" }]),
+    });
+    const shellCmd = vi.fn().mockResolvedValue("{}");
+    const cache = createModelCatalogCache({
+      cachePath,
+      shellCmd,
+      normalizeOnboardingModels: normalizeModels,
+      shouldStartDynamicRefresh: () => false,
+    });
+
+    const response = await cache.getCatalogResponse();
+
+    expect(response).toEqual({
+      ok: true,
+      source: "cache",
+      fetchedAt: 333,
+      stale: true,
+      refreshing: false,
+      models: normalizeModels([{ key: "anthropic/claude-opus-4-7" }]),
+    });
+    expect(shellCmd).not.toHaveBeenCalled();
+  });
+
   it("marks a fresh memory cache stale when the openclaw version changes", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "alphaclaw-model-catalog-version-bust-"),
@@ -144,6 +271,17 @@ describe("server/model-catalog-cache", () => {
       normalizeOnboardingModels: normalizeModels,
       readOpenclawVersion,
     });
+
+    const bootstrap = await cache.getCatalogResponse();
+    expect(bootstrap).toEqual({
+      ok: true,
+      source: kModelCatalogBootstrapSource,
+      fetchedAt: null,
+      stale: true,
+      refreshing: true,
+      models: kFallbackOnboardingModels,
+    });
+    await flushPromises();
 
     const initial = await cache.getCatalogResponse();
     expect(initial).toEqual({
@@ -289,6 +427,17 @@ describe("server/model-catalog-cache", () => {
       logger,
     });
 
+    const bootstrap = await cache.getCatalogResponse();
+    expect(bootstrap).toEqual({
+      ok: true,
+      source: kModelCatalogBootstrapSource,
+      fetchedAt: null,
+      stale: true,
+      refreshing: true,
+      models: kFallbackOnboardingModels,
+    });
+    await flushPromises();
+
     const response = await cache.getCatalogResponse();
 
     expect(response).toEqual({
@@ -306,29 +455,60 @@ describe("server/model-catalog-cache", () => {
     );
   });
 
-  it("falls back when no cache exists and the CLI load fails", async () => {
+  it("serves the bundled catalog when no cache exists and retries after backoff", async () => {
+    vi.useFakeTimers();
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "alphaclaw-model-catalog-fallback-"),
     );
     const cachePath = path.join(tempRoot, "cache", "model-catalog.json");
-    const shellCmd = vi.fn().mockRejectedValue(new Error("boom"));
+    const shellCmd = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("boom"))
+      .mockResolvedValueOnce("{}");
+    const parseJsonFromNoisyOutput = vi.fn(() => ({
+      models: [{ key: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" }],
+    }));
     const cache = createModelCatalogCache({
       cachePath,
       shellCmd,
-      parseJsonFromNoisyOutput: vi.fn(() => ({})),
+      parseJsonFromNoisyOutput,
       normalizeOnboardingModels: normalizeModels,
       readOpenclawVersion: vi.fn(() => "2026.4.14"),
+      setTimeoutFn: setTimeout,
+      clearTimeoutFn: clearTimeout,
     });
 
     const response = await cache.getCatalogResponse();
 
     expect(response).toEqual({
       ok: true,
-      source: "fallback",
+      source: kModelCatalogBootstrapSource,
       fetchedAt: null,
+      stale: true,
+      refreshing: true,
+      models: kFallbackOnboardingModels,
+    });
+    expect(shellCmd).toHaveBeenCalledTimes(1);
+
+    await flushPromises();
+
+    await vi.advanceTimersByTimeAsync(kModelCatalogRefreshBackoffMs - 1);
+    expect(shellCmd).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flushPromises();
+    expect(shellCmd).toHaveBeenCalledTimes(2);
+
+    const fresh = await cache.getCatalogResponse();
+    expect(fresh).toEqual({
+      ok: true,
+      source: "openclaw",
+      fetchedAt: expect.any(Number),
       stale: false,
       refreshing: false,
-      models: kFallbackOnboardingModels,
+      models: normalizeModels([
+        { key: "anthropic/claude-opus-4-7", name: "Claude Opus 4.7" },
+      ]),
     });
   });
 });

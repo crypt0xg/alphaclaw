@@ -33,17 +33,18 @@ describe("frontend/model-config", () => {
       { key: "anthropic/claude-opus-4-6", label: "Opus 4.6" },
       { key: "openai-codex/gpt-5.3-codex", label: "Codex 5.3" },
       { key: "openai-codex/gpt-5.4", label: "GPT-5.4" },
+      { key: "openai-codex/gpt-5.5", label: "GPT-5.5" },
     ]);
 
     expect(featured.map((entry) => entry.key)).toEqual([
       "anthropic/claude-opus-4-7",
       "anthropic/claude-opus-4-6",
       "openai-codex/gpt-5.3-codex",
-      "openai-codex/gpt-5.4",
+      "openai-codex/gpt-5.5",
       "google/gemini-3.1-pro-preview",
     ]);
     expect(featured[0]?.featuredLabel).toBe("Opus 4.7");
-    expect(featured[3]?.featuredLabel).toBe("GPT-5.4");
+    expect(featured[3]?.featuredLabel).toBe("GPT-5.5");
     expect(featured[4]?.featuredLabel).toBe("Gemini 3.1 Pro");
   });
 });
