@@ -1,0 +1,78 @@
+name: Upstream Sync
+
+# Pulls upstream into our fork weekly.
+# Clean merge → auto-commits to default branch.
+# Conflict → opens a PR you resolve manually.
+#
+# Required repo secrets: UPSTREAM_REPO (e.g. "garrytan/gstack")
+# Required workflow permissions: contents:write, pull-requests:write
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "upstream-sync-bot"
+          git config user.email "upstream-sync-bot@users.noreply.github.com"
+
+      - name: Add upstream
+        env:
+          UPSTREAM: ${{ vars.UPSTREAM_REPO }}
+        run: |
+          if [ -z "$UPSTREAM" ]; then
+            echo "ERROR: repo variable UPSTREAM_REPO is not set" >&2
+            exit 1
+          fi
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch upstream
+
+      - name: Try clean merge
+        id: merge
+        run: |
+          DEFAULT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+          UPSTREAM_BRANCH="$(git remote show upstream | sed -n 's/.*HEAD branch: //p')"
+          echo "default_branch=$DEFAULT_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=$UPSTREAM_BRANCH" >> "$GITHUB_OUTPUT"
+
+          if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+          else
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push clean merge
+        if: steps.merge.outputs.result == 'clean'
+        run: git push origin "${{ steps.merge.outputs.default_branch }}"
+
+      - name: Open conflict PR
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BR="upstream-sync/$(date -u +%Y-%m-%d)"
+          git checkout -b "$BR"
+          # Force-merge keeping our side; conflicts will be marked as conflicts in the PR
+          git merge --no-commit --strategy=ort -X theirs "upstream/${{ steps.merge.outputs.upstream_branch }}" || true
+          git add -A
+          git commit -m "Upstream sync (manual review required)" --allow-empty
+          git push origin "$BR"
+          gh pr create \
+            --title "Upstream sync: ${{ steps.merge.outputs.upstream_branch }} → ${{ steps.merge.outputs.default_branch }}" \
+            --body "Automated upstream merge had conflicts. Review and resolve before merging." \
+            --base "${{ steps.merge.outputs.default_branch }}" \
+            --head "$BR"
