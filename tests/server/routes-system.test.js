@@ -358,6 +358,208 @@ describe("server/routes/system", () => {
     );
   });
 
+  it("returns tokenized dashboard URL when OpenClaw CLI prints a token", async () => {
+    const previousEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    try {
+      const deps = createSystemDeps();
+      deps.clawCmd.mockResolvedValueOnce({
+        ok: true,
+        stdout: "Dashboard URL: http://127.0.0.1:18789/#token=abc123",
+      });
+      const app = createApp(deps);
+
+      const res = await request(app).get("/api/gateway/dashboard");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, url: "/openclaw/#token=abc123" });
+    } finally {
+      if (previousEnvToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousEnvToken;
+    }
+  });
+
+  it("falls back to plain configured gateway token for dashboard URL", async () => {
+    const deps = createSystemDeps();
+    deps.clawCmd.mockResolvedValueOnce({
+      ok: true,
+      stdout: "Dashboard URL: http://127.0.0.1:18789/",
+    });
+    deps.fs.readFileSync.mockImplementation((filePath) => {
+      if (String(filePath).endsWith("openclaw.json")) {
+        return JSON.stringify({ gateway: { auth: { token: "cfg-token+value" } } });
+      }
+      throw new Error("unexpected file");
+    });
+    const app = createApp(deps);
+
+    const res = await request(app).get("/api/gateway/dashboard");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      ok: true,
+      url: "/openclaw/#token=cfg-token%2Bvalue",
+      source: "config",
+    });
+    expect(deps.clawCmd).not.toHaveBeenCalled();
+  });
+
+  it("falls back to OPENCLAW_GATEWAY_TOKEN from env file for dashboard URL", async () => {
+    const previousEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "";
+    try {
+      const deps = createSystemDeps();
+      deps.clawCmd.mockResolvedValueOnce({
+        ok: true,
+        stdout: "Dashboard URL: http://127.0.0.1:18789/",
+      });
+      deps.readEnvFile.mockReturnValue([
+        { key: "OPENCLAW_GATEWAY_TOKEN", value: "env-token" },
+      ]);
+      const app = createApp(deps);
+
+      const res = await request(app).get("/api/gateway/dashboard");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        ok: true,
+        url: "/openclaw/#token=env-token",
+        source: "config",
+      });
+    } finally {
+      if (previousEnvToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousEnvToken;
+    }
+  });
+
+  it("resolves configured OPENCLAW_GATEWAY_TOKEN env refs for dashboard URL", async () => {
+    const previousEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "real-env-token+value";
+    try {
+      const deps = createSystemDeps();
+      deps.clawCmd.mockResolvedValueOnce({
+        ok: true,
+        stdout: "Dashboard URL: http://127.0.0.1:18789/",
+      });
+      deps.fs.readFileSync.mockImplementation((filePath) => {
+        if (String(filePath).endsWith("openclaw.json")) {
+          return JSON.stringify({
+            gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+          });
+        }
+        throw new Error("unexpected file");
+      });
+      const app = createApp(deps);
+
+      const res = await request(app).get("/api/gateway/dashboard");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        ok: true,
+        url: "/openclaw/#token=real-env-token%2Bvalue",
+        source: "config",
+      });
+    } finally {
+      if (previousEnvToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousEnvToken;
+    }
+  });
+
+  it("resolves configured OPENCLAW_GATEWAY_TOKEN env refs from env file for dashboard URL", async () => {
+    const previousEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    try {
+      const deps = createSystemDeps();
+      deps.clawCmd.mockResolvedValueOnce({
+        ok: true,
+        stdout: "Dashboard URL: http://127.0.0.1:18789/",
+      });
+      deps.fs.readFileSync.mockImplementation((filePath) => {
+        if (String(filePath).endsWith("openclaw.json")) {
+          return JSON.stringify({
+            gateway: { auth: { token: "${OPENCLAW_GATEWAY_TOKEN}" } },
+          });
+        }
+        throw new Error("unexpected file");
+      });
+      deps.readEnvFile.mockReturnValue([
+        { key: "OPENCLAW_GATEWAY_TOKEN", value: "env-file-token" },
+      ]);
+      const app = createApp(deps);
+
+      const res = await request(app).get("/api/gateway/dashboard");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        ok: true,
+        url: "/openclaw/#token=env-file-token",
+        source: "config",
+      });
+    } finally {
+      if (previousEnvToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousEnvToken;
+    }
+  });
+
+  it("resolves configured object SecretRefs for dashboard URL", async () => {
+    const previousEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    process.env.OPENCLAW_GATEWAY_TOKEN = "object-ref-token+value";
+    try {
+      const deps = createSystemDeps();
+      deps.fs.readFileSync.mockImplementation((filePath) => {
+        if (String(filePath).endsWith("openclaw.json")) {
+          return JSON.stringify({
+            gateway: {
+              auth: {
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "OPENCLAW_GATEWAY_TOKEN",
+                },
+              },
+            },
+          });
+        }
+        throw new Error("unexpected file");
+      });
+      const app = createApp(deps);
+
+      const res = await request(app).get("/api/gateway/dashboard");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({
+        ok: true,
+        url: "/openclaw/#token=object-ref-token%2Bvalue",
+        source: "config",
+      });
+      expect(deps.clawCmd).not.toHaveBeenCalled();
+    } finally {
+      if (previousEnvToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousEnvToken;
+    }
+  });
+
+  it("marks dashboard URL as needing auth when no token can be resolved", async () => {
+    const previousEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    try {
+      const deps = createSystemDeps();
+      deps.clawCmd.mockResolvedValueOnce({
+        ok: true,
+        stdout: "Dashboard URL: http://127.0.0.1:18789/",
+      });
+      const app = createApp(deps);
+
+      const res = await request(app).get("/api/gateway/dashboard");
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true, url: "/openclaw", needsAuth: true });
+    } finally {
+      if (previousEnvToken === undefined) delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      else process.env.OPENCLAW_GATEWAY_TOKEN = previousEnvToken;
+    }
+  });
+
   it("returns sync cron status on GET /api/sync-cron", async () => {
     const deps = createSystemDeps();
     deps.fs.readFileSync.mockReturnValueOnce(
