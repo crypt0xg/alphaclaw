@@ -260,6 +260,29 @@ describe("server/routes/system", () => {
     ]);
   });
 
+  it("hides and preserves WHATSAPP_OWNER_NUMBER on /api/env", async () => {
+    const deps = createSystemDeps();
+    deps.readEnvFile.mockReturnValue([
+      { key: "WHATSAPP_OWNER_NUMBER", value: "+15551234567" },
+    ]);
+    const app = createApp(deps);
+
+    const getRes = await request(app).get("/api/env");
+    expect(getRes.status).toBe(200);
+    expect(
+      getRes.body.vars.some((entry) => entry.key === "WHATSAPP_OWNER_NUMBER"),
+    ).toBe(false);
+
+    const putRes = await request(app).put("/api/env").send({
+      vars: [{ key: "OPENAI_API_KEY", value: "same" }],
+    });
+    expect(putRes.status).toBe(200);
+    expect(deps.writeEnvFile).toHaveBeenCalledWith([
+      { key: "OPENAI_API_KEY", value: "same" },
+      { key: "WHATSAPP_OWNER_NUMBER", value: "+15551234567" },
+    ]);
+  });
+
   it("syncs API-key auth profiles from known env vars on save", async () => {
     const deps = createSystemDeps();
     const app = createApp(deps);
