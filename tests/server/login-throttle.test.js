@@ -1,4 +1,7 @@
-const { createLoginThrottle } = require("../../lib/server/login-throttle");
+const {
+  createLoginThrottle,
+  createMemoryLoginThrottleStore,
+} = require("../../lib/server/login-throttle");
 const {
   kLoginWindowMs,
   kLoginMaxAttempts,
@@ -64,6 +67,40 @@ describe("server/login-throttle", () => {
     expect(state.client.failStreak).toBe(0);
     expect(state.global.attempts).toBe(0);
     expect(state.global.failStreak).toBe(0);
+  });
+
+  it("isolates scoped throttle state in the same store", () => {
+    const store = createMemoryLoginThrottleStore();
+    const loginThrottle = createLoginThrottle({
+      store,
+      maxAttempts: 2,
+      globalMaxAttempts: 100,
+    });
+    const apiThrottle = createLoginThrottle({
+      store,
+      scope: "openai-compat-api",
+      maxAttempts: 2,
+      globalMaxAttempts: 100,
+    });
+    const now = 12_000;
+    const apiState = apiThrottle.getOrCreateLoginAttemptState("client-1", now);
+
+    apiThrottle.recordLoginFailure(apiState, now);
+
+    const loginState = loginThrottle.getOrCreateLoginAttemptState(
+      "client-1",
+      now + 1,
+    );
+    expect(loginState.client.attempts).toBe(0);
+    expect(loginState.global.attempts).toBe(0);
+    expect(store.entries().map(([key]) => key)).toEqual(
+      expect.arrayContaining([
+        "client:openai-compat-api:client-1",
+        "global:openai-compat-api",
+        "client:client-1",
+        "global:login",
+      ]),
+    );
   });
 
   it("locks globally even when failures rotate across client keys", () => {
