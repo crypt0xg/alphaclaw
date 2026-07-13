@@ -4,7 +4,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { execSync } = require("child_process");
+const { execFileSync, execSync } = require("child_process");
 const {
   shouldSkipSystemCronInstall,
   resolveGitAskPassPath,
@@ -20,6 +20,9 @@ const {
   restoreMissingOpenclawConfigFromRemote,
 } = require("../lib/cli/openclaw-config-restore");
 const { buildSecretReplacements } = require("../lib/server/helpers");
+const {
+  migrateLegacyTelegramStreamingConfig,
+} = require("../lib/server/openclaw-config-migrations");
 const {
   migrateManagedInternalFiles,
 } = require("../lib/server/internal-files-migration");
@@ -731,6 +734,36 @@ if (fs.existsSync(path.join(openclawDir, ".git"))) {
 }
 
 if (fs.existsSync(configPath)) {
+  try {
+    execFileSync(process.execPath, [
+      path.join(__dirname, "..", "lib", "scripts", "migrate-openclaw-codex.js"),
+    ], {
+      env: process.env,
+      stdio: "inherit",
+      timeout: 60_000,
+    });
+  } catch (error) {
+    console.error(`[alphaclaw] Codex migration process failed: ${error.message}`);
+  }
+}
+
+if (fs.existsSync(configPath)) {
+  try {
+    execFileSync(process.execPath, [
+      path.join(__dirname, "..", "lib", "scripts", "reconcile-codex-plugin.js"),
+    ], {
+      env: process.env,
+      stdio: "inherit",
+      timeout: 150_000,
+    });
+  } catch (error) {
+    console.error(
+      `[alphaclaw] Codex plugin reconciliation process failed: ${error.message}`,
+    );
+  }
+}
+
+if (fs.existsSync(configPath)) {
   console.log("[alphaclaw] Config exists, reconciling channels...");
 
   try {
@@ -740,7 +773,10 @@ if (fs.existsSync(configPath)) {
     if (!cfg.plugins.load) cfg.plugins.load = {};
     if (!Array.isArray(cfg.plugins.load.paths)) cfg.plugins.load.paths = [];
     if (!cfg.plugins.entries) cfg.plugins.entries = {};
-    let changed = false;
+    let changed = migrateLegacyTelegramStreamingConfig(cfg);
+    if (changed) {
+      console.log("[alphaclaw] Migrated legacy Telegram streaming config");
+    }
 
     if (process.env.TELEGRAM_BOT_TOKEN && !cfg.channels.telegram) {
       cfg.channels.telegram = {
