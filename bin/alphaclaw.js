@@ -26,6 +26,7 @@ const {
 const {
   migrateManagedInternalFiles,
 } = require("../lib/server/internal-files-migration");
+const { assertSupportedNodeVersion } = require("../lib/node-runtime");
 
 const kUsageTrackerPluginPath = path.resolve(
   __dirname,
@@ -99,6 +100,7 @@ Usage: alphaclaw <command> [options]
 Commands:
   start     Start the AlphaClaw server (Setup UI + gateway manager)
   git-sync  Commit and push /data/.openclaw safely using GITHUB_TOKEN
+  doctor finding complete  Mark a queued Doctor finding fixed after verification
   telegram topic add  Add/update Telegram topic mapping by thread ID
   version   Print version
 
@@ -121,6 +123,11 @@ telegram topic add options:
   --agent <id>        Optional agent ID for per-topic routing
   --group <id>        Optional group ID override (auto-resolves when one group exists)
 
+doctor finding complete options:
+  --id <id>           Doctor finding ID
+  --run <run-id>      Queued fix run ID
+  --token <token>     One-time completion token
+
 Examples:
   alphaclaw git-sync --message "sync workspace"
   alphaclaw git-sync --message "update config" --file "workspace/app/config.json"
@@ -129,6 +136,15 @@ Examples:
   alphaclaw telegram topic add --thread 12 --name "Ops" --agent ops
 `);
   process.exit(0);
+}
+
+if (command === "start") {
+  try {
+    assertSupportedNodeVersion();
+  } catch (error) {
+    console.error(`[alphaclaw] ${error.message}`);
+    process.exit(1);
+  }
 }
 
 const quoteArg = (value) => `'${String(value || "").replace(/'/g, "'\"'\"'")}'`;
@@ -392,6 +408,59 @@ const runGitSync = () => {
 
 if (command === "git-sync") {
   process.exit(runGitSync());
+}
+
+const runDoctorFindingComplete = () => {
+  const cardId = Number.parseInt(
+    String(flagValue(commandArgs, "--id") || ""),
+    10,
+  );
+  const runId = String(flagValue(commandArgs, "--run") || "").trim();
+  const token = String(flagValue(commandArgs, "--token") || "").trim();
+  if (!Number.isInteger(cardId) || cardId <= 0 || !runId || !token) {
+    console.error(
+      "[alphaclaw] doctor finding complete requires --id, --run, and --token",
+    );
+    return 1;
+  }
+
+  const {
+    closeDoctorDb,
+    completeDoctorCardFix,
+    initDoctorDb,
+  } = require("../lib/server/db/doctor");
+  const {
+    hashDoctorFixToken,
+  } = require("../lib/server/doctor/fix-completion");
+  try {
+    initDoctorDb({ rootDir, markInterruptedRuns: false });
+    const card = completeDoctorCardFix({
+      id: cardId,
+      runId,
+      tokenHash: hashDoctorFixToken(token),
+    });
+    if (!card) {
+      console.error("[alphaclaw] Doctor fix completion was not accepted");
+      return 1;
+    }
+    console.log(`[alphaclaw] Doctor finding ${cardId} marked fixed`);
+    return 0;
+  } catch (error) {
+    console.error(
+      `[alphaclaw] Doctor fix completion failed: ${error.message || "Unknown error"}`,
+    );
+    return 1;
+  } finally {
+    closeDoctorDb();
+  }
+};
+
+if (
+  command === "doctor" &&
+  commandScope === "finding" &&
+  commandAction === "complete"
+) {
+  process.exit(runDoctorFindingComplete());
 }
 
 const runTelegramTopicAdd = () => {
@@ -730,6 +799,30 @@ if (fs.existsSync(path.join(openclawDir, ".git"))) {
     })
   ) {
     console.log("[alphaclaw] Set main upstream to origin/main");
+  }
+}
+
+// Persist config-shape migrations before any OpenClaw import or CLI command.
+// Newer OpenClaw releases validate config eagerly and cannot repair a shape
+// that prevents the CLI from starting.
+if (fs.existsSync(configPath)) {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(configPath, "utf8"));
+    if (migrateLegacyTelegramStreamingConfig(cfg)) {
+      let content = `${JSON.stringify(cfg, null, 2)}\n`;
+      for (const [secret, envRef] of buildSecretReplacements(process.env)) {
+        if (!secret) continue;
+        content = content
+          .split(JSON.stringify(secret))
+          .join(JSON.stringify(envRef));
+      }
+      fs.writeFileSync(configPath, content, "utf8");
+      console.log("[alphaclaw] Migrated legacy Telegram streaming config");
+    }
+  } catch (error) {
+    console.error(
+      `[alphaclaw] Preflight config migration failed: ${error.message}`,
+    );
   }
 }
 
